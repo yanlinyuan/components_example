@@ -2,9 +2,13 @@ import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
+import pandas_profiling
 from pandas_profiling import ProfileReport
+import streamlit_lottie
 from streamlit_lottie import st_lottie
+import streamlit_pandas_profiling
 from streamlit_pandas_profiling import st_profile_report
+import streamlit_plotly_events
 from streamlit_plotly_events import plotly_events
 
 

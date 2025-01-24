@@ -1,6 +1,7 @@
 import folium
 import pandas as pd
 import streamlit as st
+import streamlit_folium
 from streamlit_folium import st_folium
 
 st.title("SF Trees Map")

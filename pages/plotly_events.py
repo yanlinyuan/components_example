@@ -1,6 +1,7 @@
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import streamlit_plotly_events
 from streamlit_plotly_events import plotly_events
 
 st.title("Streamlit Plotly Events Example: Penguins")
