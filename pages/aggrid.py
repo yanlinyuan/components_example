@@ -1,6 +1,5 @@
 import pandas as pd
 import streamlit as st
-import streamlit-aggrid
 from streamlit-aggrid import AgGrid
 
 st.title("Streamlit AgGrid Example: Penguins")
