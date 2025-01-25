@@ -11,7 +11,8 @@ from streamlit_pandas_profiling import st_profile_report
 import streamlit_plotly_events
 from streamlit_plotly_events import plotly_events
 from pydantic_settings import BaseSettings
-
+from typing import List
+from pydantic import BaseModel
 
 def load_lottieurl(url: str):
     r = requests.get(url)
