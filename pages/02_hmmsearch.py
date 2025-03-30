@@ -1,21 +1,26 @@
 #02_hmmsearch.py
 import streamlit as st
 import os
-import subprocess
 import time
 import shutil
 import logging
+import pandas as pd
 from datetime import datetime
-from pathlib import Path  # 新增Pathlib处理路径
+from pathlib import Path
+from Bio import SeqIO
+from Bio.Align.Applications import ClustalwCommandline
+import pyhmmer
+from pyhmmer.plan7 import HMMFile, HMMPressed
+from pyhmmer.easel import SequenceFile, DigitalSequenceBlock
 
 class Args:
     def __init__(self, domain, protein, species, gene, hmm_exp1, hmm_exp2):
-        self.domain = str(domain).replace("\\", "/")  # 统一使用Linux路径格式
-        self.protein = str(protein).replace("\\", "/")
+        self.domain = Path(domain)
+        self.protein = Path(protein)
         self.species = species
         self.gene = gene
-        self.hmm_exp1 = hmm_exp1
-        self.hmm_exp2 = hmm_exp2
+        self.hmm_exp1 = float(hmm_exp1)
+        self.hmm_exp2 = float(hmm_exp2)
 
 def log_step_start(step_name):
     start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -31,7 +36,7 @@ def log_step_end(step_name, success=True):
     logging.info(message)
 
 def check_files(file_list, step_name):
-    missing = [f for f in file_list if not Path(f).exists()]
+    missing = [f for f in file_list if not f.exists()]
     if missing:
         error_msg = f"{step_name} 缺失文件：{missing}"
         logging.error(error_msg)
@@ -40,136 +45,116 @@ def check_files(file_list, step_name):
     st.write(f"{step_name} 文件检查通过")
     logging.info(f"{step_name} 文件检查通过")
 
-def run_command(cmd_info, work_dir):
-    step_name = cmd_info["step"]
-    command = cmd_info["cmd"]
-    inputs = cmd_info.get("inputs", [])
-    outputs = cmd_info["outputs"]
-
-    log_step_start(step_name)
+def run_hmmsearch(hmm_path, fasta_path, output_prefix, evalue):
+    """执行HMM搜索的纯Python实现"""
+    with pyhmmer.plan7.HMMFile(hmm_path) as hmm_file:
+        hmm = hmm_file.read()
     
-    if inputs:
-        check_files(inputs, f"{step_name} 输入文件")
-
-    try:
-        # 显示完整路径信息
-        st.write(f"当前工作目录：{Path(work_dir).resolve()}")
-        st.write(f"输入文件路径验证：{[Path(f).resolve() for f in inputs]}")
-        
-        st.write(f"执行命令：{command}")
-        start_time = time.time()
-        
-        # 使用绝对路径执行命令
-        process = subprocess.run(
-            command,
-            shell=True,
-            check=True,
-            cwd=work_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        
-        # 显示命令输出
-        st.write("命令输出：")
-        st.code(process.stdout)
-        if process.stderr:
-            st.write("命令错误输出：")
-            st.code(process.stderr)
-        
-        cost_time = round(time.time() - start_time, 2)
-        st.write(f"命令执行耗时：{cost_time}秒")
-        logging.info(f"命令执行耗时：{cost_time}秒")
-    except subprocess.CalledProcessError as e:
-        log_step_end(step_name, False)
-        st.error(f"命令执行失败详情：\n{e.stderr}")
-        raise
-
-    check_files(outputs, f"{step_name} 输出文件")
+    sequences = SequenceFile(fasta_path).read_block()
+    press = HMMPressed()
+    results = []
     
-    time.sleep(1)
-    log_step_end(step_name)
-
-def main_streamlit(args):
-    logging.basicConfig(filename='run.log', level=logging.INFO,
-                      format='%(asctime)s - %(message)s', encoding='utf-8')
+    for seq in DigitalSequenceBlock(sequences):
+        hits = pyhmmer.hmmsearch(hmm, seq, E=evalue)
+        for hit in hits:
+            results.append({
+                "target": hit.name.decode(),
+                "evalue": hit.evalue
+            })
     
-    base_dir = Path.cwd()
-    work_dir = base_dir / "2.hmmsearch"
-    database_dir = base_dir / "1.database"
+    df = pd.DataFrame(results)
+    df.to_csv(f"{output_prefix}.domtblout", sep="\t", index=False)
+    return df
 
-    try:
-        # 初始化工作目录
-        st.write("初始化工作环境...")
-        if work_dir.exists():
-            shutil.rmtree(work_dir)
-        work_dir.mkdir(exist_ok=True)
+def filter_results(input_file, output_file, evalue):
+    """过滤结果"""
+    df = pd.read_csv(input_file, sep="\t")
+    filtered = df[df["evalue"] < evalue]
+    filtered["target"].to_csv(output_file, index=False, header=False)
+    return filtered
 
-        # 处理输入文件
-        st.write("处理输入文件...")
-        required_files = {
-            "HMM模型文件": (Path(args.domain), work_dir / Path(args.domain).name),
-            "蛋白序列文件": (Path(args.protein), work_dir / Path(args.protein).name)
-        }
+def extract_sequences(fasta_path, id_list, output_path):
+    """提取序列"""
+    ids = set(pd.read_csv(id_list, header=None)[0])
+    records = []
+    for record in SeqIO.parse(fasta_path, "fasta"):
+        if record.id in ids:
+            records.append(record)
+    SeqIO.write(records, output_path, "fasta")
 
-        for file_type, (src, dest) in required_files.items():
-            if not src.exists():
-                raise FileNotFoundError(f"{file_type} {src} 不存在！")
-            shutil.copy(src, dest)
-            st.write(f"已拷贝 {file_type}: {dest.resolve()}")  # 显示完整路径
+def build_hmm(alignment_path, hmm_path):
+    """构建HMM模型"""
+    with SequenceFile(alignment_path, digital=True) as seqs:
+        alphabet = seqs.alphabet
+        msa = seqs.read_block()
+    
+    builder = pyhmmer.plan7.Builder(alphabet)
+    background = pyhmmer.plan7.Background(alphabet)
+    hmm, _ = builder.build_msa(msa, background)
+    with open(hmm_path, "wb") as f:
+        hmm.write(f)
 
-        # 定义中间文件路径（使用绝对路径）
-        intermediate_files = {
-            "initial_domtbl": work_dir / f"{args.species}.{args.gene}.domtblout",
-            "initial_hmmout": work_dir / f"{args.species}.{args.gene}.hmmout",
-            "first_filter": work_dir / f"{args.species}.{args.gene}.filter.1st",
-            "new_hmm": work_dir / f"new_{args.gene}.hmm",
-            "second_domtbl": work_dir / f"{args.species}.new_{args.gene}.domtblout",
-            "second_hmmout": work_dir / f"{args.species}.new_{args.gene}.hmmout",
-            "second_filter": work_dir / f"{args.species}.new_{args.gene}.filter.2st"
-        }
+def main_pipeline(args):
+    """主分析流程"""
+    work_dir = Path("2.hmmsearch")
+    work_dir.mkdir(exist_ok=True)
+    
+    # 步骤1: 初始HMM搜索
+    log_step_start("初始HMM搜索筛选")
+    initial_domtbl = work_dir / f"{args.species}.{args.gene}.domtblout"
+    run_hmmsearch(args.domain, args.protein, initial_domtbl.stem, args.hmm_exp1)
+    log_step_end("初始HMM搜索筛选")
 
-        # 构建命令（使用绝对路径）
-        commands = [
-            {
-                "step": "初始HMM搜索筛选",
-                "cmd": f"hmmsearch --cut_tc --domtblout {intermediate_files['initial_domtbl']} "
-                       f"-o {intermediate_files['initial_hmmout']} "
-                       f'"{work_dir / Path(args.domain).name}" '
-                       f'"{work_dir / Path(args.protein).name}"',
-                "inputs": [work_dir / Path(args.domain).name, work_dir / Path(args.protein).name],
-                "outputs": [intermediate_files['initial_domtbl'], intermediate_files['initial_hmmout']]
-            },
-            # ...其他命令配置
-        ]
+    # 步骤2: 第一次筛选
+    log_step_start("第一次筛选过滤")
+    first_filter = work_dir / f"{args.species}.{args.gene}.filter.1st"
+    filter_results(initial_domtbl, first_filter, args.hmm_exp1)
+    log_step_end("第一次筛选过滤")
 
-        # 执行所有命令
-        for cmd_info in commands:
-            run_command(cmd_info, work_dir)
+    # 步骤3: 提取候选序列
+    log_step_start("提取候选蛋白序列")
+    first_fasta = work_dir / "1st_id.fa"
+    extract_sequences(args.protein, first_filter, first_fasta)
+    log_step_end("提取候选蛋白序列")
 
-        # 显示结果
-        result_file = work_dir / "2st_id.fa"
-        if result_file.exists():
-            with open(result_file, "r") as f:
-                st.subheader("结果文件前5行内容：")
-                st.code(''.join(f.readlines()[:5]))
-            
-            with open(result_file, "rb") as f:
-                st.download_button("下载结果文件", f, file_name="2st_id.fa")
+    # 步骤4: 多序列比对
+    log_step_start("多序列比对")
+    alignment = work_dir / "1st_id.aln"
+    cline = ClustalwCommandline("clustalw2", infile=str(first_fasta), outfile=str(alignment))
+    cline()
+    log_step_end("多序列比对")
 
-    except Exception as e:
-        st.error(f"错误详情：\n{str(e)}\n"
-                f"当前工作目录：{Path.cwd()}\n"
-                f"文件存在性验证：\n"
-                f"- HMM文件：{Path(args.domain).exists()}\n"
-                f"- 蛋白文件：{Path(args.protein).exists()}")
-        raise
+    # 步骤5: 构建新HMM
+    log_step_start("构建新HMM模型")
+    new_hmm = work_dir / f"new_{args.gene}.hmm"
+    build_hmm(alignment, new_hmm)
+    log_step_end("构建新HMM模型")
 
-# Streamlit界面配置
-st.title("HMM基因家族分析平台（Windows优化版）")
+    # 步骤6: 二次HMM搜索
+    log_step_start("二次HMM搜索筛选")
+    second_domtbl = work_dir / f"{args.species}.new_{args.gene}.domtblout"
+    run_hmmsearch(new_hmm, args.protein, second_domtbl.stem, args.hmm_exp2)
+    log_step_end("二次HMM搜索筛选")
 
-# 文件上传处理
+    # 步骤7: 第二次筛选
+    log_step_start("第二次筛选过滤")
+    second_filter = work_dir / f"{args.species}.new_{args.gene}.filter.2st"
+    filter_results(second_domtbl, second_filter, args.hmm_exp2)
+    log_step_end("第二次筛选过滤")
+
+    # 步骤8: 提取最终序列
+    log_step_start("提取最终蛋白序列")
+    final_fasta = work_dir / "2st_id.fa"
+    extract_sequences(args.protein, second_filter, final_fasta)
+    log_step_end("提取最终蛋白序列")
+
+    return final_fasta
+
+# Streamlit界面
+st.title("HMM基因家族分析平台（纯Python版）")
+
 def handle_upload(uploaded_file, default_path):
+    """处理文件上传"""
     if uploaded_file is not None:
         save_dir = Path("1.database")
         save_dir.mkdir(exist_ok=True)
@@ -179,6 +164,7 @@ def handle_upload(uploaded_file, default_path):
         return target_path
     return Path(default_path)
 
+# 文件上传组件
 uploaded_domain = st.file_uploader("上传HMM模型文件", type=["hmm"], 
                                  help="默认使用 ./1.database/PF08392.hmm")
 domain_path = handle_upload(uploaded_domain, "./1.database/PF08392.hmm")
@@ -187,37 +173,45 @@ uploaded_protein = st.file_uploader("上传蛋白序列文件", type=["fa", "fas
                                   help="默认使用 ./1.database/Brassica_napus.ZS11.v0.protein.fa")
 protein_path = handle_upload(uploaded_protein, "./1.database/Brassica_napus.ZS11.v0.protein.fa")
 
-# 参数输入组件
-species = st.text_input("物种标识符", value="BN").upper()
-gene = st.text_input("基因家族名称", value="KCS").upper()
+# 参数输入
+col1, col2 = st.columns(2)
+with col1:
+    species = st.text_input("物种标识符", value="BN").upper()
+with col2:
+    gene = st.text_input("基因家族名称", value="KCS").upper()
 
-# 数值输入处理
-hmm_exp1 = st.number_input("首次筛选E值", value=0.00001, format="%.5f")
-hmm_exp2 = st.number_input("二次筛选E值", value=0.00001, format="%.5f")
+hmm_exp1 = st.number_input("首次筛选E值", value=1e-5, format="%.1e")
+hmm_exp2 = st.number_input("二次筛选E值", value=1e-5, format="%.1e")
 
 if st.button("开始分析"):
-    with st.spinner("分析进行中..."):
-        args = Args(
-            domain=domain_path,
-            protein=protein_path,
-            species=species,
-            gene=gene,
-            hmm_exp1=str(hmm_exp1),
-            hmm_exp2=str(hmm_exp2)
-        )
+    args = Args(
+        domain=domain_path,
+        protein=protein_path,
+        species=species,
+        gene=gene,
+        hmm_exp1=hmm_exp1,
+        hmm_exp2=hmm_exp2
+    )
+    
+    try:
+        with st.spinner("分析进行中..."):
+            result_file = main_pipeline(args)
+            
+            # 显示结果
+            with open(result_file, "r") as f:
+                st.subheader("结果文件前5行内容：")
+                st.code(''.join(f.readlines()[:5]))
+            
+            with open(result_file, "rb") as f:
+                st.download_button("下载结果文件", f, file_name="2st_id.fa")
         
-        try:
-            main_streamlit(args)
-            st.success("分析成功完成！")
-        except Exception as e:
-            st.error(f"分析失败，请检查：\n1. 文件路径是否包含特殊字符\n2. 必要组件是否安装\n3. 日志信息：{str(e)}")
-            st.write("常见问题解决方案：")
-            st.markdown("""
-            1. **路径问题**：确保文件路径不包含中文或特殊字符
-            2. **文件权限**：以管理员身份运行命令行
-            3. **依赖安装**：确认已安装：
-               - HMMER (hmmsearch)
-               - seqkit
-               - clustalw
-            4. **日志查看**：检查当前目录下的run.log文件
-            """)
+        st.success("分析完成！")
+    
+    except Exception as e:
+        st.error(f"分析失败：{str(e)}")
+        st.markdown("""
+        **常见问题解决方案：**
+        1. 确保上传文件格式正确
+        2. 检查输入参数范围
+        3. 验证输入文件完整性
+        """)
