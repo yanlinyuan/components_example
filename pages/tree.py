@@ -6,7 +6,7 @@ from io import BytesIO
 st.title("进化树可视化工具")
 
 # 文件上传组件
-uploaded_file = st.file_uploader("请上传进化树文件", type=["treefile", "nwk"])
+uploaded_file = st.file_uploader("请上传进化树文件", type=["treefile"])
 
 if uploaded_file is not None:
     # 显示文件基本信息
@@ -22,7 +22,7 @@ if uploaded_file is not None:
         with st.spinner("正在解析进化树..."):
             try:
                 # 读取Newick格式的进化树
-                tree = Phylo.read(uploaded_file, "newick")
+                tree = Phylo.read(uploaded_file, "treefile")
                 
                 # 创建绘图区域
                 fig = plt.figure(figsize=(20, len(tree.get_terminals()) * 0.5))
