@@ -4,284 +4,353 @@ import platform
 import sys
 import re
 import requests
-import socket
+from socket import gethostname, gethostbyname
 import os
 import time
 from pathlib import Path
-from typing import Dict, List, Union
-from functools import lru_cache
 
-# 配置常量
-MAX_DIR_DEPTH = 3
-PAGE_SIZE = 25
-IP_API_ENDPOINTS = [
-    'https://api.ipify.org?format=json',
-    'https://ipinfo.io/json',
-    'https://ifconfig.me/all.json'
-]
-
-def get_local_ips() -> List[str]:
-    """获取所有本地IP地址"""
-    ips = []
+def get_system_info():
+    """获取系统级信息，包含IP地址"""
     try:
-        for interface in socket.getaddrinfo(socket.gethostname(), None):
-            ip = interface[4][0]
-            if ip not in ips and not ip.startswith('127.'):
-                ips.append(ip)
-    except:
-        pass
-    return ips or ['无法获取']
-
-@st.cache_data(ttl=60)
-def get_public_ip() -> str:
-    """获取公网IP地址，带重试机制"""
-    for endpoint in IP_API_ENDPOINTS:
-        try:
-            response = requests.get(endpoint, timeout=3)
-            if response.status_code == 200:
-                return response.json().get('ip', '格式错误')
-        except Exception as e:
-            continue
-    return '获取失败'
-
-@st.cache_data(ttl=3600)
-def get_system_info() -> Dict:
-    """获取增强版系统信息"""
-    try:
-        return {
-            "system": platform.system(),
-            "release": platform.release(),
-            "version": platform.version(),
-            "machine": platform.machine(),
-            "hostname": socket.gethostname(),
-            "local_ips": get_local_ips(),
-            "public_ip": get_public_ip(),
-            "processor": platform.processor(),
-            "python_version": platform.python_version()
+        # 获取基础系统信息
+        os_info = {
+            "System": platform.system(),
+            "Release": platform.release(),
+            "Version": platform.version(),
+            "Machine": platform.machine(),
+            "Hostname": gethostname()
         }
+
+        # 获取IP地址信息
+        try:
+            # 获取内网IP
+            os_info["Internal IP"] = gethostbyname(gethostname())
+            
+            # 获取公网IP
+            ip_response = requests.get('https://api.ipify.org?format=json', timeout=3)
+            if ip_response.status_code == 200:
+                os_info["Public IP"] = ip_response.json()["ip"]
+            else:
+                os_info["Public IP"] = "获取失败"
+        except Exception as ip_error:
+            os_info["Public IP"] = f"获取错误: {str(ip_error)}"
+
+        return os_info
     except Exception as e:
-        return {"error": str(e)}
+        return {"Error": str(e)}
 
-def format_size(size_bytes: float) -> str:
-    """智能格式化文件大小"""
-    for unit in ['B', 'KB', 'MB', 'GB']:
-        if size_bytes < 1024:
-            return f"{size_bytes:.2f}{unit}"
-        size_bytes /= 1024
-    return f"{size_bytes:.2f}TB"
-
-def scan_directory(path: Path, depth: int = 0) -> Dict:
-    """安全扫描目录结构"""
-    structure = {}
-    if depth > MAX_DIR_DEPTH:
-        return structure
-    
+def get_filesystem_info():
+    """获取文件系统结构信息"""
     try:
-        for entry in path.iterdir():
-            try:
-                if entry.is_dir():
-                    structure[f"📁 {entry.name}"] = scan_directory(entry, depth+1)
-                else:
-                    structure[f"📄 {entry.name}"] = {
-                        "size": format_size(entry.stat().st_size),
-                        "modified": entry.stat().st_mtime
-                    }
-            except Exception as e:
-                structure[f"⚠️ {entry.name}"] = str(e)
-    except PermissionError:
-        structure["权限不足"] = {}
-    except Exception as e:
-        structure[f"扫描失败: {str(e)}"] = {}
-    
-    return structure
-
-@st.cache_data(ttl=10)
-def get_filesystem_info() -> Dict:
-    """获取增强版文件系统信息"""
-    try:
+        # 获取当前工作目录
         current_path = Path.cwd()
+        
+        # 获取文件系统结构（限制3层深度）
+        fs_structure = {}
+        def scan_directory(path, depth=0):
+            if depth > 2:  # 控制扫描深度
+                return {}
+            structure = {}
+            try:
+                for entry in path.iterdir():
+                    if entry.is_dir():
+                        structure[entry.name + '/'] = scan_directory(entry, depth+1)
+                    else:
+                        structure[entry.name] = "file"
+            except Exception as e:
+                structure[f"⚠️访问错误({str(e)})"] = {}
+            return structure
+        
+        # 获取文件列表详细信息
+        file_list = []
+        for item in current_path.iterdir():
+            try:
+                stat = item.stat()
+                file_list.append({
+                    "name": item.name + ('/' if item.is_dir() else ''),
+                    "size": f"{stat.st_size/1024:.1f}KB",
+                    "modified": time.strftime('%Y-%m-%d %H:%M', 
+                                   time.localtime(stat.st_mtime)),
+                    "type": "目录" if item.is_dir() else "文件"
+                })
+            except Exception as e:
+                file_list.append({
+                    "name": f"⚠️{item.name}",
+                    "size": "N/A",
+                    "modified": "访问错误",
+                    "type": str(e)
+                })
+        
         return {
             "current_path": str(current_path),
-            "structure": scan_directory(current_path),
-            "total_space": format_size(os.statvfs(current_path).f_blocks * os.statvfs(current_path).f_frsize),
-            "free_space": format_size(os.statvfs(current_path).f_bavail * os.statvfs(current_path).f_frsize)
+            "structure": scan_directory(current_path.parent),  # 显示上级目录结构
+            "files": file_list
         }
     except Exception as e:
-        return {"error": f"文件系统错误: {str(e)}"}
+        return {"Error": f"文件系统扫描失败: {str(e)}"}
 
-def display_directory_tree(tree: Dict, parent: str = "") -> None:
-    """递归显示目录树形结构"""
-    for name, contents in tree.items():
-        if isinstance(contents, dict) and "size" not in contents:
-            with st.expander(f"🗂️ {name}", expanded=depth<1):
-                display_directory_tree(contents, name)
-        else:
-            st.markdown(f"""
-            <div style="margin-left: {20*depth}px">
-                🔸 {name}  
-                <span style="color: #666; font-size: 0.8em">
-                    {contents.get('size', '')} | 
-                    {time.strftime('%Y-%m-%d', time.localtime(contents.get('modified')))}
-                </span>
-            </div>
-            """, unsafe_allow_html=True)
+def display_filesystem_info(fs_info):
+    """显示文件系统信息"""
+    if "Error" in fs_info:
+        st.error(fs_info["Error"])
+        return
+    
+    cols = st.columns([2, 3])
+    
+    with cols[0]:
+        st.markdown("**目录结构**")
+        with st.container(height=300):
+            def print_structure(structure, indent=0):
+                for name, contents in structure.items():
+                    st.markdown(f"{'&nbsp;'*indent*4}📁 {name}" if name.endswith('/') else 
+                               f"{'&nbsp;'*indent*4}📄 {name}")
+                    if isinstance(contents, dict):
+                        print_structure(contents, indent+1)
+            
+            print_structure(fs_info["structure"])
+    
+    with cols[1]:
+        st.markdown(f"**当前路径：** `{fs_info['current_path']}`")
+        st.markdown("**文件列表**")
+        st.dataframe(
+            fs_info["files"],
+            column_config={
+                "name": "文件名",
+                "size": "大小",
+                "modified": "修改时间",
+                "type": "类型"
+            },
+            use_container_width=True,
+            height=300
+        )
 
-def display_system_panel() -> None:
-    """显示系统信息面板"""
-    with st.expander("🖥️ 系统概览", expanded=True):
-        cols = st.columns([1,1,2])
+# 修改后的系统信息展示部分
+def display_system_info():
+    """显示增强后的系统信息"""
+    with st.expander("📋 系统基本信息", expanded=True):
         sys_info = get_system_info()
         fs_info = get_filesystem_info()
         
-        with cols[0]:
-            st.subheader("系统信息")
-            st.metric("操作系统", f"{sys_info.get('system', '')} {sys_info.get('release', '')}")
-            st.metric("Python版本", sys_info.get('python_version', '未知'))
-            
-        with cols[1]:
-            st.subheader("网络信息")
-            st.metric("公网IP", sys_info.get('public_ip', '未知'))
-            st.metric("内网IP", ", ".join(sys_info.get('local_ips', [])))
-            
-        with cols[2]:
-            st.subheader("存储信息")
-            if not fs_info.get("error"):
-                st.write(f"**当前路径:** `{fs_info['current_path']}`")
-                st.progress(1 - (os.statvfs(fs_info['current_path']).f_bavail / 
-                           os.statvfs(fs_info['current_path']).f_blocks))
-                cols = st.columns(2)
-                cols[0].metric("总空间", fs_info["total_space"])
-                cols[1].metric("可用空间", fs_info["free_space"])
+        # 三栏布局
+        info_cols = st.columns([2, 2, 3])
+        
+        with info_cols[0]:
+            st.markdown("**操作系统信息**")
+            st.json({
+                "系统类型": sys_info.get("System", "N/A"),
+                "发行版本": sys_info.get("Release", "N/A"),
+                "系统版本": sys_info.get("Version", "N/A")
+            })
+        
+        with info_cols[1]:
+            st.markdown("**网络信息**")
+            st.json({
+                "主机名": sys_info.get("Hostname", "N/A"),
+                "内网IP": sys_info.get("Internal IP", "N/A"),
+                "公网IP": sys_info.get("Public IP", "N/A")
+            })
+        
+        with info_cols[2]:
+            st.markdown("**文件系统**")
+            display_filesystem_info(fs_info)
 
-def get_system_packages() -> Dict:
-    """跨平台获取系统软件包"""
-    system = platform.system()
+def get_system_packages():
+    """获取系统级安装的软件包"""
     try:
+        system = platform.system()
+        packages = {}
+
         if system == "Linux":
-            return parse_dpkg_packages()
+            # 尝试获取Debian/Ubuntu系软件包
+            result = subprocess.run(
+                ["dpkg", "-l"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            # 解析dpkg输出
+            for line in result.stdout.split('\n'):
+                if line.startswith('ii '):
+                    parts = re.split(r'\s+', line.strip(), maxsplit=4)
+                    if len(parts) >= 4:
+                        packages[parts[1]] = parts[2]
+
         elif system == "Darwin":
-            return parse_brew_packages()
+            # 尝试获取Homebrew安装的软件
+            result = subprocess.run(
+                ["brew", "list", "--versions"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            for line in result.stdout.split('\n'):
+                if line.strip():
+                    parts = line.strip().split()
+                    if len(parts) >= 2:
+                        packages[parts[0]] = ' '.join(parts[1:])
+
         elif system == "Windows":
-            return parse_winget_packages()
-        return {"error": f"不支持的系统: {system}"}
+            # 获取Windows已安装程序
+            result = subprocess.run(
+                ["powershell", "Get-ItemProperty HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* | Select-Object DisplayName, DisplayVersion"],
+                capture_output=True,
+                text=True,
+                check=True,
+                shell=True
+            )
+            for line in result.stdout.split('\n')[3:-3]:
+                if line.strip():
+                    parts = line.split(maxsplit=1)
+                    if len(parts) >= 2:
+                        name = re.sub(r'\s{2,}', ' ', parts[0])
+                        version = parts[1].strip()
+                        packages[name] = version
+
+        else:
+            return {"Error": f"Unsupported OS: {system}"}
+
+        return packages
+
+    except subprocess.CalledProcessError as e:
+        return {"Error": f"命令执行失败: {e.stderr}"}
+    except FileNotFoundError:
+        return {"Error": "包管理器未找到"}
     except Exception as e:
-        return {"error": str(e)}
+        return {"Error": str(e)}
 
-def parse_dpkg_packages() -> Dict:
-    """解析Debian系软件包"""
-    result = subprocess.run(["dpkg", "-l"], capture_output=True, text=True)
-    return {
-        parts[1]: parts[2] 
-        for line in result.stdout.splitlines() 
-        if line.startswith('ii ') and (parts := re.split(r'\s+', line, 4))
-    }
-
-def parse_brew_packages() -> Dict:
-    """解析Homebrew软件包"""
-    result = subprocess.run(["brew", "list", "--versions"], capture_output=True, text=True)
-    return {
-        parts[0]: ' '.join(parts[1:])
-        for line in result.stdout.splitlines()
-        if line and (parts := line.split())
-    }
-
-def parse_winget_packages() -> Dict:
-    """解析Windows软件包"""
-    ps_command = """
-    Get-ItemProperty HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* |
-    Select-Object DisplayName, DisplayVersion |
-    Where-Object { $_.DisplayName -ne $null }
-    """
-    result = subprocess.run(
-        ["powershell", "-Command", ps_command],
-        capture_output=True, 
-        text=True,
-        shell=True
-    )
-    packages = {}
-    for line in result.stdout.splitlines()[3:-3]:
-        if line.strip() and (parts := re.split(r'\s{2,}', line, 1)):
-            packages[parts[0]] = parts[1].strip() if len(parts) > 1 else '未知版本'
-    return packages
-
-@st.cache_data
-def get_python_packages() -> Dict:
-    """获取Python包信息"""
+def get_python_packages():
+    """获取Python安装包信息"""
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pip", "list", "--format=freeze"],
             capture_output=True,
-            text=True
+            text=True,
+            check=True
         )
-        return dict(
-            tuple(pkg.split('==')) 
-            for line in result.stdout.splitlines() 
-            if '==' in (pkg := line.strip())
-        )
+        packages = {}
+        for line in result.stdout.split('\n'):
+            if '==' in line:
+                pkg, ver = line.split('==')
+                packages[pkg.strip()] = ver.strip()
+        return packages
+    except subprocess.CalledProcessError as e:
+        return {"Error": f"命令执行失败: {e.stderr}"}
     except Exception as e:
-        return {"error": str(e)}
+        return {"Error": str(e)}
 
-def display_package_table(packages: Dict, title: str) -> None:
-    """交互式表格显示"""
-    if "error" in packages:
-        st.error(packages["error"])
-        return
-    
-    search_term = st.text_input(
-        f"搜索{title}包", 
-        placeholder="输入包名关键词...",
-        key=f"search_{title}"
-    )
-    
-    filtered = {
-        k:v for k,v in packages.items()
-        if search_term.lower() in k.lower()
-    }
-    
-    if not filtered:
-        st.warning("未找到匹配的软件包")
-        return
-    
-    st.dataframe(
-        pd.DataFrame.from_dict(filtered, orient='index', columns=["版本"]),
-        use_container_width=True,
-        height=600
-    )
-
-def main():
-    st.set_page_config(
-        page_title="服务器监控仪表盘",
-        page_icon="🖥️",
-        layout="wide"
-    )
-    st.title("服务器全景监控仪表盘")
-    
-    display_system_panel()
-    
-    st.header("📦 软件仓库")
+def display_combined_packages(system_pkgs, python_pkgs):
+    """显示合并后的软件包信息"""
     tab1, tab2 = st.tabs(["系统软件", "Python包"])
     
     with tab1:
-        if st.button("扫描系统软件", key="scan_system"):
-            with st.spinner("正在扫描系统软件..."):
-                st.session_state.system_packages = get_system_packages()
-        if "system_packages" in st.session_state:
-            display_package_table(st.session_state.system_packages, "系统")
+        if "Error" in system_pkgs:
+            st.error(system_pkgs["Error"])
+        else:
+            st.subheader(f"系统软件包 ({len(system_pkgs)}个)")
+            display_package_table(system_pkgs, "system")
     
     with tab2:
-        if st.button("扫描Python包", key="scan_python"):
-            with st.spinner("正在扫描Python环境..."):
-                st.session_state.python_packages = get_python_packages()
-        if "python_packages" in st.session_state:
-            display_package_table(st.session_state.python_packages, "Python")
+        if "Error" in python_pkgs:
+            st.error(python_pkgs["Error"])
+        else:
+            st.subheader(f"Python包 ({len(python_pkgs)}个)")
+            display_package_table(python_pkgs, "python")
+
+def display_package_table(packages, pkg_type):
+    """通用包信息显示组件（增强版）"""
+    if not packages:
+        st.warning("没有找到软件包信息")
+        return
     
-    st.sidebar.markdown("### 操作说明")
-    st.sidebar.info("""
-    1. 点击各区域的扫描按钮获取最新数据
-    2. 使用搜索框快速定位软件包
-    3. 表格支持点击列标题排序
-    4. 数据自动缓存60秒
+    # 创建搜索框
+    search_term = st.text_input(
+        "输入名称过滤：", 
+        key=f"search_{pkg_type}",
+        placeholder="支持模糊搜索"
+    )
+    
+    # 过滤结果
+    filtered = {k:v for k,v in packages.items() if search_term.lower() in k.lower()}
+    
+    # 分页控制
+    if filtered:
+        PAGE_SIZE = 25
+        total_pages = max(1, (len(filtered) + PAGE_SIZE - 1) // PAGE_SIZE)
+        
+        cols = st.columns([2,1,3])
+        with cols[1]:
+            page = st.number_input(
+                "页码",
+                min_value=1,
+                max_value=total_pages,
+                value=1,
+                key=f"page_{pkg_type}"
+            )
+        
+        # 显示分页信息
+        start = (page-1)*PAGE_SIZE
+        end = start + PAGE_SIZE
+        st.caption(f"显示第 {start+1}-{min(end, len(filtered))} 条，共 {len(filtered)} 条")
+        
+        # 显示表格
+        st.table(
+            list(filtered.items())[start:end]
+        )
+    else:
+        st.warning("没有找到匹配的软件包")
+
+# 修改主界面调用
+def main():
+    st.set_page_config(
+        page_title="服务器全景监控",
+        page_icon="🖥️",
+        layout="wide"
+    )
+    st.title("🖥️ 服务器环境全景监控")
+    
+    # 显示系统信息（包含文件系统）
+    display_system_info()
+    
+    # 软件信息部分保持不变
+    st.markdown("## 📦 已安装软件清单")
+
+    if st.button("🔄 一键刷新所有软件信息", type="primary"):
+        with st.spinner("正在全面扫描系统，可能需要较长时间..."):
+            system_pkgs = get_system_packages()
+            python_pkgs = get_python_packages()
+            
+            # 使用session_state保存结果
+            st.session_state.system_pkgs = system_pkgs
+            st.session_state.python_pkgs = python_pkgs
+
+    # 显示存储的结果
+    if 'system_pkgs' in st.session_state and 'python_pkgs' in st.session_state:
+        display_combined_packages(
+            st.session_state.system_pkgs,
+            st.session_state.python_pkgs
+        )
+
+    # 注意事项
+    st.markdown("""
+    ---
+    **注意事项**：
+    1. 系统软件检测支持：Linux (dpkg)、macOS (Homebrew)、Windows (注册表)
+    2. 公网IP通过第三方API获取，可能受网络环境影响
+    3. 数据仅反映当前运行环境状态
+    4. 首次加载可能需要30秒左右完成扫描
     """)
+
+    # 样式调整
+    st.markdown("""
+    <style>
+    div[data-baseweb="input"] > input {
+        max-width: 300px;
+    }
+    div.stSpinner > div {
+        margin: auto;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
