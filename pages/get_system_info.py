@@ -332,47 +332,6 @@ with st.expander("📋 系统基本信息", expanded=True):
             "公网IP": sys_info.get("Public IP", "N/A")
         })
 
-# 软件信息展示
-st.markdown("## 📦 已安装软件清单")
-
-if st.button("🔄 一键刷新所有软件信息", type="primary"):
-    with st.spinner("正在全面扫描系统，可能需要较长时间..."):
-        system_pkgs = get_system_packages()
-        python_pkgs = get_python_packages()
-        
-        # 使用session_state保存结果
-        st.session_state.system_pkgs = system_pkgs
-        st.session_state.python_pkgs = python_pkgs
-
-# 显示存储的结果
-if 'system_pkgs' in st.session_state and 'python_pkgs' in st.session_state:
-    display_combined_packages(
-        st.session_state.system_pkgs,
-        st.session_state.python_pkgs
-    )
-
-# 注意事项
-st.markdown("""
----
-**注意事项**：
-1. 系统软件检测支持：Linux (dpkg)、macOS (Homebrew)、Windows (注册表)
-2. 公网IP通过第三方API获取，可能受网络环境影响
-3. 数据仅反映当前运行环境状态
-4. 首次加载可能需要30秒左右完成扫描
-""")
-
-# 样式调整
-st.markdown("""
-<style>
-div[data-baseweb="input"] > input {
-    max-width: 300px;
-}
-div.stSpinner > div {
-    margin: auto;
-}
-</style>
-""", unsafe_allow_html=True)
-
 # 修改主界面调用
 def main():
     st.set_page_config(
@@ -385,9 +344,46 @@ def main():
     # 显示系统信息（包含文件系统）
     display_system_info()
     
-    # 软件信息部分保持不变
+    # 软件信息展示
     st.markdown("## 📦 已安装软件清单")
-    # ... 原有软件信息显示代码
+
+    if st.button("🔄 一键刷新所有软件信息", type="primary"):
+        with st.spinner("正在全面扫描系统，可能需要较长时间..."):
+            system_pkgs = get_system_packages()
+            python_pkgs = get_python_packages()
+            
+            # 使用session_state保存结果
+            st.session_state.system_pkgs = system_pkgs
+            st.session_state.python_pkgs = python_pkgs
+
+    # 显示存储的结果
+    if 'system_pkgs' in st.session_state and 'python_pkgs' in st.session_state:
+        display_combined_packages(
+            st.session_state.system_pkgs,
+            st.session_state.python_pkgs
+        )
+
+    # 注意事项
+    st.markdown("""
+    ---
+    **注意事项**：
+    1. 系统软件检测支持：Linux (dpkg)、macOS (Homebrew)、Windows (注册表)
+    2. 公网IP通过第三方API获取，可能受网络环境影响
+    3. 数据仅反映当前运行环境状态
+    4. 首次加载可能需要30秒左右完成扫描
+    """)
+
+    # 样式调整
+    st.markdown("""
+    <style>
+    div[data-baseweb="input"] > input {
+        max-width: 300px;
+    }
+    div.stSpinner > div {
+        margin: auto;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
