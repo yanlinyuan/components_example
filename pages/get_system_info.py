@@ -147,7 +147,7 @@ def display_system_panel() -> None:
             st.subheader("存储信息")
             if not fs_info.get("error"):
                 st.write(f"**当前路径:** `{fs_info['current_path']}`")
-                st.progress((1 - (os.statvfs(fs_info['current_path']).f_bavail / 
+                st.progress(1 - (os.statvfs(fs_info['current_path']).f_bavail / 
                            os.statvfs(fs_info['current_path']).f_blocks))
                 cols = st.columns(2)
                 cols[0].metric("总空间", fs_info["total_space"])
