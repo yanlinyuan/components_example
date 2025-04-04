@@ -5,6 +5,9 @@ import sys
 import re
 import requests
 from socket import gethostname, gethostbyname
+import os
+import time
+from pathlib import Path
 
 def get_system_info():
     """获取系统级信息，包含IP地址"""
@@ -36,6 +39,122 @@ def get_system_info():
     except Exception as e:
         return {"Error": str(e)}
 
+def get_filesystem_info():
+    """获取文件系统结构信息"""
+    try:
+        # 获取当前工作目录
+        current_path = Path.cwd()
+        
+        # 获取文件系统结构（限制3层深度）
+        fs_structure = {}
+        def scan_directory(path, depth=0):
+            if depth > 2:  # 控制扫描深度
+                return {}
+            structure = {}
+            try:
+                for entry in path.iterdir():
+                    if entry.is_dir():
+                        structure[entry.name + '/'] = scan_directory(entry, depth+1)
+                    else:
+                        structure[entry.name] = "file"
+            except Exception as e:
+                structure[f"⚠️访问错误({str(e)})"] = {}
+            return structure
+        
+        # 获取文件列表详细信息
+        file_list = []
+        for item in current_path.iterdir():
+            try:
+                stat = item.stat()
+                file_list.append({
+                    "name": item.name + ('/' if item.is_dir() else ''),
+                    "size": f"{stat.st_size/1024:.1f}KB",
+                    "modified": time.strftime('%Y-%m-%d %H:%M', 
+                                   time.localtime(stat.st_mtime)),
+                    "type": "目录" if item.is_dir() else "文件"
+                })
+            except Exception as e:
+                file_list.append({
+                    "name": f"⚠️{item.name}",
+                    "size": "N/A",
+                    "modified": "访问错误",
+                    "type": str(e)
+                })
+        
+        return {
+            "current_path": str(current_path),
+            "structure": scan_directory(current_path.parent),  # 显示上级目录结构
+            "files": file_list
+        }
+    except Exception as e:
+        return {"Error": f"文件系统扫描失败: {str(e)}"}
+
+def display_filesystem_info(fs_info):
+    """显示文件系统信息"""
+    if "Error" in fs_info:
+        st.error(fs_info["Error"])
+        return
+    
+    cols = st.columns([2, 3])
+    
+    with cols[0]:
+        st.markdown("**目录结构**")
+        with st.container(height=300):
+            def print_structure(structure, indent=0):
+                for name, contents in structure.items():
+                    st.markdown(f"{'&nbsp;'*indent*4}📁 {name}" if name.endswith('/') else 
+                               f"{'&nbsp;'*indent*4}📄 {name}")
+                    if isinstance(contents, dict):
+                        print_structure(contents, indent+1)
+            
+            print_structure(fs_info["structure"])
+    
+    with cols[1]:
+        st.markdown(f"**当前路径：** `{fs_info['current_path']}`")
+        st.markdown("**文件列表**")
+        st.dataframe(
+            fs_info["files"],
+            column_config={
+                "name": "文件名",
+                "size": "大小",
+                "modified": "修改时间",
+                "type": "类型"
+            },
+            use_container_width=True,
+            height=300
+        )
+
+# 修改后的系统信息展示部分
+def display_system_info():
+    """显示增强后的系统信息"""
+    with st.expander("📋 系统基本信息", expanded=True):
+        sys_info = get_system_info()
+        fs_info = get_filesystem_info()
+        
+        # 三栏布局
+        info_cols = st.columns([2, 2, 3])
+        
+        with info_cols[0]:
+            st.markdown("**操作系统信息**")
+            st.json({
+                "系统类型": sys_info.get("System", "N/A"),
+                "发行版本": sys_info.get("Release", "N/A"),
+                "系统版本": sys_info.get("Version", "N/A")
+            })
+        
+        with info_cols[1]:
+            st.markdown("**网络信息**")
+            st.json({
+                "主机名": sys_info.get("Hostname", "N/A"),
+                "内网IP": sys_info.get("Internal IP", "N/A"),
+                "公网IP": sys_info.get("Public IP", "N/A")
+            })
+        
+        with info_cols[2]:
+            st.markdown("**文件系统**")
+            display_filesystem_info(fs_info)
+
+# 其他函数保持原有实现不变（get_system_packages, get_python_packages, display_combined_packages等）
 def get_system_packages():
     """获取系统级安装的软件包"""
     try:
@@ -253,3 +372,22 @@ div.stSpinner > div {
 }
 </style>
 """, unsafe_allow_html=True)
+
+# 修改主界面调用
+def main():
+    st.set_page_config(
+        page_title="服务器全景监控",
+        page_icon="🖥️",
+        layout="wide"
+    )
+    st.title("🖥️ 服务器环境全景监控")
+    
+    # 显示系统信息（包含文件系统）
+    display_system_info()
+    
+    # 软件信息部分保持不变
+    st.markdown("## 📦 已安装软件清单")
+    # ... 原有软件信息显示代码
+
+if __name__ == "__main__":
+    main()
