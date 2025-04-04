@@ -137,22 +137,22 @@ def display_system_info():
         with info_cols[0]:
             st.markdown("**文件系统**")
             display_filesystem_info(fs_info)    
-       
+
         with info_cols[1]:
-            st.markdown("**网络信息**")
-            st.json({
-                "主机名": sys_info.get("Hostname", "N/A"),
-                "内网IP": sys_info.get("Internal IP", "N/A"),
-                "公网IP": sys_info.get("Public IP", "N/A")
-            })
-       
-        with info_cols[2]:
             st.markdown("**操作系统信息**")
             st.json({
                 "系统类型": sys_info.get("System", "N/A"),
                 "发行版本": sys_info.get("Release", "N/A"),
                 "系统版本": sys_info.get("Version", "N/A")
-            })        
+            })     
+
+        with info_cols[2]:
+            st.markdown("**网络信息**")
+            st.json({
+                "主机名": sys_info.get("Hostname", "N/A"),
+                "内网IP": sys_info.get("Internal IP", "N/A"),
+                "公网IP": sys_info.get("Public IP", "N/A")
+            })   
 
 def get_system_packages():
     """获取系统级安装的软件包"""
