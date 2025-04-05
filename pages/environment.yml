@@ -1,0 +1,9 @@
+name: streamlit-app
+channels:
+  - conda-forge
+dependencies:
+  - python=3.8
+  - pip
+  - conda
+  - streamlit
+  - ipython  # 可选，用于增强输出显示
