@@ -117,3 +117,4 @@ st.sidebar.markdown("""
 4. Markdown笔记本：编写格式化的文档
 
 **依赖安装**（在requirements.txt中添加）：
+""")
