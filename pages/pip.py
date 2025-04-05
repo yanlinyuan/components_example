@@ -19,7 +19,7 @@ def run_command(command):
 st.title("命令行执行工具")
 st.warning("注意：此工具仅用于演示目的，请谨慎执行系统命令！")
 
-command = st.text_input("输入命令行指令（例如：conda --version）", 
+command = st.text_input("输入命令行指令（例如：pip --version）", 
                        placeholder="输入有效的系统命令")
 
 if st.button("执行"):
